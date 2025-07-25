@@ -126,32 +126,38 @@ class KivyCamera(Image):
         now = datetime.datetime.now(tz=datetime.UTC)
         path = Path(self.config.get("reactions", "image_dir"))
         full_path = f"{path}{os.sep}{now.isoformat()}.jpg"
-        cv2.imwrite(
-            full_path,
-            self.last_real_frame,
-        )
+        try:
+            cv2.imwrite(
+                full_path,
+                self.last_real_frame,
+            )
+        except Exception as exc:
+            print("ERROR writing file:", exc)
         email_recipients = self.config.get("reactions", "email_recipients").strip()
         email_server = self.config.get("reactions", "email_server").strip()
         if email_recipients and email_server:
-            email_url = urlsplit(email_server)
-            msg = EmailMessage()
-            msg["Subject"] = f"Intrusion alert: {now}"
-            sender = self.config.get("reactions", "email_sender").strip()
-            if not sender:
-                sender = f"{email_url.username or 'intrusiondetection'}@{email_url.hostname.removeprefix('smtp.')}"
-            msg["From"] = sender
-            msg["To"] = email_recipients
-            msg.set_content(f"Intrusion alert triggered at {now}")
-            with open(full_path, "rb") as rob:
-                msg.add_attachment(
-                    rob.read(),
-                    maintype="image",
-                    subtype="jpg",
-                    filename=f"{now.isoformat()}.jpg",
-                )
+            try:
+                email_url = urlsplit(email_server)
+                msg = EmailMessage()
+                msg["Subject"] = f"Intrusion alert: {now}"
+                sender = self.config.get("reactions", "email_sender").strip()
+                if not sender:
+                    sender = f"{email_url.username or 'intrusiondetection'}@{email_url.hostname.removeprefix('smtp.')}"
+                msg["From"] = sender
+                msg["To"] = email_recipients
+                msg.set_content(f"Intrusion alert triggered at {now}")
+                with open(full_path, "rb") as rob:
+                    msg.add_attachment(
+                        rob.read(),
+                        maintype="image",
+                        subtype="jpg",
+                        filename=f"{now.isoformat()}.jpg",
+                    )
 
-            with self.create_smtp_context() as s:
-                s.send_message(msg)
+                with self.create_smtp_context() as s:
+                    s.send_message(msg)
+            except Exception as exc:
+                print("ERROR sending email:", exc)
         if count < self.config.getint("alarm", "repeats"):
             Clock.schedule_once(
                 partial(self.raise_alarm, count=count + 1),
