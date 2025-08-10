@@ -1,5 +1,6 @@
 detections
 intrusiondetection/intrusion.ini
+intrusiondetection/intrusiondetection.ini
 .vscode
 tsconfig.tsbuildinfo
 # override and custom definitions

@@ -3,6 +3,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
 
-from intrusiondetection.main import IntrusionApp
+from intrusiondetection.main import IntrusionDetectionApp
 
-IntrusionApp().run()
+IntrusionDetectionApp().run()

@@ -19,6 +19,7 @@ import numpy as np
 from kivy.app import App
 from kivy.clock import Clock
 from kivy.graphics.texture import Texture
+from kivy.logger import Logger
 from kivy.uix.image import Image
 
 
@@ -31,13 +32,15 @@ class KivyCamera(Image):
         self.last_real_frame = None
         self.alarm_triggered = False
         self.alarm_active = False
+        self.warmup_active = True
         self.fps = config.getint("camera", "fps")
         self.alarm_threshold = config.getfloat("detection", "threshold")
         self.fps_counter = 0
         path = Path(self.config.get("reactions", "image_dir"))
         path.mkdir(parents=True, exist_ok=True)
+        email_recipients = self.config.get("reactions", "email_recipients").strip()
         email_server = self.config.get("reactions", "email_server").strip()
-        if email_server:
+        if email_server and email_recipients:
             with self.create_smtp_context(timeout=4) as s:
                 s.noop()
         Clock.schedule_interval(self.update, 1.0 / self.fps)
@@ -57,13 +60,13 @@ class KivyCamera(Image):
             mses.append(err / (float(h * w)))
         mse_avg = statistics.mean(mses)
         if self.fps_counter == 0:
-            print("mse detected", mse_avg, "threshold", self.alarm_threshold)
+            Logger.debug("mse detected", mse_avg, "threshold", self.alarm_threshold)
         if not self.alarm_active:
             return False
         if mse_avg <= self.alarm_threshold:
             return False
         if not self.alarm_triggered:
-            print(
+            Logger.debug(
                 "mse detected triggering alarm",
                 mse_avg,
                 "threshold",
@@ -73,7 +76,9 @@ class KivyCamera(Image):
 
     def set_alarm(self, dt=None, *, state):
         self.alarm_active = state
-        print("alarm is now:", "active" if state else "deactivated")
+        if not state:
+            self.warmup_active = False
+        Logger.debug("alarm is now:", "active" if state else "deactivated")
 
     def set_alarm_triggered_off(self, dt=None):
         self.alarm_triggered = False
@@ -113,7 +118,7 @@ class KivyCamera(Image):
                     )
                 yield s
         except TimeoutError as exc:
-            print(
+            Logger.error(
                 "timeout for",
                 email_url.hostname,
                 email_url.port,
@@ -132,7 +137,7 @@ class KivyCamera(Image):
                 self.last_real_frame,
             )
         except Exception as exc:
-            print("ERROR writing file:", exc)
+            Logger.exception("ERROR writing file:", exc)
         email_recipients = self.config.get("reactions", "email_recipients").strip()
         email_server = self.config.get("reactions", "email_server").strip()
         if email_recipients and email_server:
@@ -157,7 +162,7 @@ class KivyCamera(Image):
                 with self.create_smtp_context() as s:
                     s.send_message(msg)
             except Exception as exc:
-                print("ERROR sending email:", exc)
+                Logger.exception("ERROR sending email:", exc)
         if count < self.config.getint("alarm", "repeats"):
             Clock.schedule_once(
                 partial(self.raise_alarm, count=count + 1),
@@ -169,18 +174,20 @@ class KivyCamera(Image):
                 self.config.getfloat("alarm", "cooldown"),
             )
 
+    def draw_cv2_frame(self, frame):
+        # convert it to texture
+        image_texture = Texture.create(
+            size=(frame.shape[1], frame.shape[0]), colorfmt="bgr", bufferfmt="ubyte"
+        )
+        image_texture.blit_buffer(frame.tostring(), colorfmt="bgr")
+        image_texture.flip_vertical()
+        # display image from the texture
+        self.texture = image_texture
+
     def update(self, dt):
         ret, frame = self.capture.read()
         if ret:
             self.last_real_frame = frame
-            # convert it to texture
-            buf = cv2.flip(frame, 0).tostring()
-            image_texture = Texture.create(
-                size=(frame.shape[1], frame.shape[0]), colorfmt="bgr"
-            )
-            image_texture.blit_buffer(buf, colorfmt="bgr", bufferfmt="ubyte")
-            # display image from the texture
-            self.texture = image_texture
             gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             gray_frame = cv2.blur(gray_frame, (5, 5))
             if self.shall_raise_alarm(gray_frame):
@@ -190,11 +197,42 @@ class KivyCamera(Image):
                         self.config.getfloat("alarm", "delay"),
                     )
                 self.alarm_triggered = True
+            shown_frame = frame.copy()
+            if not self.alarm_active:
+                shown_frame = cv2.putText(
+                    shown_frame,
+                    f"Alarm: {'warming up' if self.warmup_active else 'paused'}",
+                    (20, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    2,
+                    (153, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+            elif self.alarm_triggered:
+                params = {
+                    "text": "Alarm",
+                    "fontFace": cv2.FONT_HERSHEY_SIMPLEX,
+                    "fontScale": 3,
+                    "thickness": 3,
+                }
+                text_size, baseline = cv2.getTextSize(**params)
+                shown_frame = cv2.putText(
+                    shown_frame,
+                    **params,
+                    # x, y
+                    org=(
+                        max(0, shown_frame.shape[1] // 2 - text_size[0] // 2),
+                        shown_frame.shape[0] // 2,
+                    ),
+                    color=(0, 0, 255),
+                )
+            self.draw_cv2_frame(shown_frame)
             self.last_frames.append(gray_frame)
             self.fps_counter = (self.fps_counter + 1) % self.fps
 
 
-class IntrusionApp(App):
+class IntrusionDetectionApp(App):
     def build_config(self, config):
         config.setdefaults("camera", {"source": "0", "fps": "30"})
         config.setdefaults("detection", {"threshold": "10"})
@@ -226,7 +264,9 @@ class IntrusionApp(App):
         except Exception:
             pass
         self.capture = cv2.VideoCapture(source)
-        self.motion_camera = KivyCamera(capture=self.capture, config=config)
+        self.motion_camera = KivyCamera(
+            capture=self.capture, config=config, fit_mode="contain"
+        )
         return self.motion_camera
 
     def on_stop(self):
@@ -235,4 +275,4 @@ class IntrusionApp(App):
 
 
 if __name__ == "__main__":
-    IntrusionApp().run()
+    IntrusionDetectionApp().run()
