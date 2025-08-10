@@ -25,7 +25,7 @@ from kivy.uix.image import Image
 
 class KivyCamera(Image):
     def __init__(self, capture, config, **kwargs):
-        super(KivyCamera, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.config = config
         self.capture = capture
         self.last_frames = deque(maxlen=10)
